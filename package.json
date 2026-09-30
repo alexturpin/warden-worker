@@ -1,0 +1,12 @@
+{
+  "name": "warden-worker",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy --env=\"\" --profile personal",
+    "dev": "wrangler dev --local --persist-to .wrangler/state --profile personal",
+    "db:migrate": "wrangler d1 migrations apply vault1 --remote --profile personal"
+  },
+  "devDependencies": {
+    "wrangler": "4.144.0"
+  }
+}

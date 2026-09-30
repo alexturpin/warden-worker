@@ -11,7 +11,7 @@ This:
 3) Executes it against a D1 database via wrangler
 
 Usage:
-  ./scripts/seed-global-domains.sh --db <d1_name> [--env <wrangler_env>] [--remote] [--url <raw_json_url>] [--wrangler-version <ver>]
+  ./scripts/seed-global-domains.sh --db <d1_name> [--env <wrangler_env>] [--profile <auth_profile>] [--remote] [--url <raw_json_url>] [--wrangler-version <ver>]
 
 Examples:
   ./scripts/seed-global-domains.sh --db vault1 --remote
@@ -26,6 +26,7 @@ EOF
 
 DB_NAME=""
 ENV_NAME=""
+PROFILE=""
 REMOTE=0
 URL=""
 INPUT=""
@@ -38,6 +39,8 @@ while [[ $# -gt 0 ]]; do
       DB_NAME="${2:-}"; shift 2;;
     --env)
       ENV_NAME="${2:-}"; shift 2;;
+    --profile)
+      PROFILE="${2:-}"; shift 2;;
     --remote)
       REMOTE=1; shift;;
     --url)
@@ -80,9 +83,15 @@ if [[ "$REMOTE" -eq 1 ]]; then
   WRANGLER_ARGS+=(--remote)
 fi
 
+if [[ -n "$PROFILE" ]]; then
+  WRANGLER_ARGS+=(--profile "$PROFILE")
+fi
+
 WRANGLER=(wrangler)
 if [[ -n "$WRANGLER_VERSION" ]]; then
   WRANGLER=(npx --yes "wrangler@${WRANGLER_VERSION}")
+elif [[ -x node_modules/.bin/wrangler ]]; then
+  WRANGLER=(./node_modules/.bin/wrangler)
 elif ! command -v wrangler >/dev/null 2>&1; then
   WRANGLER=(npx --yes wrangler)
 fi

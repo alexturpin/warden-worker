@@ -1,20 +1,26 @@
-name: Build
+name: Deploy production
 permissions:
     contents: read
 
 on:
   push:
-    branches: [main, uat, release*]
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Run production build
     runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://vault.alexturpin.com
     env:
       # Pin tool versions to avoid upstream updates breaking CI
       WORKER_BUILD_VERSION: "0.8.5"
-      WRANGLER_VERSION: "4.82.1"
       # Web Vault frontend (bw_web_builds) version tag (default pinned; override via GitHub Actions Variables)
       # - Set repository variable BW_WEB_VERSION (e.g. v2026.6.4) to override
       # - Set to "latest" to follow the latest bw_web_builds release
@@ -22,15 +28,25 @@ jobs:
 
       # Required for wrangler
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: "d85a0daa3e2452f1bcc7ba56d59ceb5e"
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Set up Node.js (for npx wrangler)
+      - name: Set up Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: "24"
+
+      - name: Install deployment dependencies
+        run: npm ci
+
+      - name: Check deployment credential
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "Set the CLOUDFLARE_API_TOKEN repository secret before deploying." >&2
+            exit 1
+          fi
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         run: |
@@ -101,29 +117,10 @@ jobs:
         run: |
           mkdir -p public/web-vault/css/ && cp public/css/vaultwarden.css public/web-vault/css/
 
-      - name: Replace D1_DATABASE_ID in wrangler.toml
-        run: sed -i "s/\${D1_DATABASE_ID}/${{ secrets.D1_DATABASE_ID }}/g" wrangler.toml
-
-      - name: Enable R2 binding when R2_NAME is provided
-        env:
-          R2_NAME: ${{ secrets.R2_NAME }}
-        run: |
-          if [ -n "$R2_NAME" ]; then
-            echo "🔧 Enabling R2 bucket binding"
-            {
-              echo ''
-              echo '[[r2_buckets]]'
-              echo 'binding = "ATTACHMENTS_BUCKET"'
-              echo "bucket_name = \"${R2_NAME}\""
-            } >> wrangler.toml
-          else
-            echo "⏭️ R2_NAME not set, skipping R2 binding"
-          fi
-
       - name: Bootstrap D1 schema when database is empty
         run: |
           set -euo pipefail
-          WRANGLER="npx --yes wrangler@${WRANGLER_VERSION}"
+          WRANGLER="./node_modules/.bin/wrangler"
 
           # Capture raw wrangler output so jq parse errors don't hide the real failure.
           set +e
@@ -173,7 +170,7 @@ jobs:
       - name: Apply D1 database migrations
         run: |
           set -euo pipefail  # Ensure pipe returns first non-zero exit code
-          WRANGLER="npx --yes wrangler@${WRANGLER_VERSION}"
+          WRANGLER="./node_modules/.bin/wrangler"
 
           # Apply migrations with retry loop to handle legacy ensure_schema columns
           MAX_RETRIES=15
@@ -235,16 +232,16 @@ jobs:
           fi
 
           if [ -n "${GLOBAL_DOMAINS_URL:-}" ]; then
-            bash scripts/seed-global-domains.sh --db vault1 --remote --wrangler-version "${WRANGLER_VERSION}" --url "${GLOBAL_DOMAINS_URL}"
+            bash scripts/seed-global-domains.sh --db vault1 --remote --url "${GLOBAL_DOMAINS_URL}"
           else
-            bash scripts/seed-global-domains.sh --db vault1 --remote --wrangler-version "${WRANGLER_VERSION}"
+            bash scripts/seed-global-domains.sh --db vault1 --remote
           fi
 
-      - uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3
-        id: cf
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: ${{ env.WRANGLER_VERSION }}
-          packageManager: npm
-          command: deploy
+      - name: Deploy Worker and custom domain
+        run: ./node_modules/.bin/wrangler deploy --env=""
+
+      - name: Verify production endpoints
+        run: |
+          curl --fail --silent --show-error --retry 6 --retry-all-errors --retry-delay 10 https://vault.alexturpin.com/ >/dev/null
+          curl --fail --silent --show-error --retry 6 --retry-all-errors --retry-delay 10 https://vault.alexturpin.com/api/alive
+          curl --fail --silent --show-error https://vault.alexturpin.com/api/config | jq -e '.environment.vault == "https://vault.alexturpin.com"'

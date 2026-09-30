@@ -1,9 +1,11 @@
 name = "warden-worker"
+account_id = "d85a0daa3e2452f1bcc7ba56d59ceb5e"
 main = "src/entry.js"
 compatibility_date = "2025-09-19"
 keep_vars = true
 workers_dev = false
 preview_urls = false
+routes = [{ pattern = "vault.alexturpin.com", custom_domain = true }]
 
 [durable_objects]
 bindings = [
@@ -54,6 +56,7 @@ html_handling = "auto-trailing-slash"
 run_worker_first = ["/api/*", "/identity/*", "/notifications/*"]
 
 [vars]
+BASE_URL = "https://vault.alexturpin.com"
 # Base URL for the worker, used for generating up/down URLs for files.
 # If not set, the base URL will be extracted from the incoming request.
 # BASE_URL = "https://vault.example.com"
@@ -110,8 +113,8 @@ crons = ["0 3 * * *"]
 
 [[d1_databases]]
 binding = "vault1"
-database_name = "vault1"
-database_id = "${D1_DATABASE_ID}"
+database_name = "warden-vault"
+database_id = "73f75f9e-adfd-4867-9195-a37df126ca65"
 migrations_dir = "migrations"
 
 # R2 bucket for file attachments (optional, requires credit card)
@@ -127,6 +130,7 @@ migrations_dir = "migrations"
 # If R2 is not configured, KV will be used for attachments.
 [[kv_namespaces]]
 binding = "ATTACHMENTS_KV"
+id = "1fbae7ad40b143fd8a4a1cf12508450d"
 
 [env.dev]
 name = "warden-worker-dev"

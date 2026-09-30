@@ -17,3 +17,6 @@ sql/global_domains_seed.sql
 .codex/
 .cursor/
 .claude/
+# Worker build output and local runtime secrets
+build/
+.dev.vars*

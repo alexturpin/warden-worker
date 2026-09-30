@@ -1,5 +1,84 @@
 # Deployment
 
+## This repository's production deployment
+
+Production is `https://vault.alexturpin.com`, deployed as `warden-worker` in
+Cloudflare account `d85a0daa3e2452f1bcc7ba56d59ceb5e`.
+`wrangler.toml` contains the Custom Domain, D1 database `warden-vault`, and the
+attachment KV namespace ID. These IDs are configuration, not credentials.
+Wrangler manages the Custom Domain's DNS record and certificate during deployment.
+
+Install the pinned local CLI with `npm ci`. Local commands use the `personal`
+OAuth profile explicitly:
+
+```bash
+npm run deploy
+npm run db:migrate
+npm run dev
+npm exec -- wrangler secret list --profile personal
+```
+
+The production database is initialized from `sql/schema.sql`; migrations included
+in that snapshot are recorded in `d1_migrations`. Subsequent deployments apply new
+migrations before publishing the Worker. Do not apply the snapshot to an existing
+vault or rerun the initial migration-marking step against an existing database.
+
+### Automatic deployments
+
+The `Deploy production` GitHub Actions workflow deploys pushes to `main` and can
+also be run manually. Deployments run serially. It downloads the pinned Web Vault,
+builds Rust/WASM, applies D1 migrations, seeds equivalent domains, publishes the
+Worker, and checks the website, `/api/alive`, and `/api/config`.
+
+One GitHub environment secret is required: **`CLOUDFLARE_API_TOKEN`**, in the
+`production` environment. The deployment job explicitly selects that environment.
+Create the token at
+[Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens), scoped to
+the account above and the `alexturpin.com` zone, with:
+
+- Account → Workers Scripts → Edit (deployment)
+- Account → D1 → Edit (migrations and domain seeding)
+- Account → Account Settings → Read (account discovery)
+- Zone → Zone → Read (zone discovery)
+- Zone → Workers Routes → Edit (Custom Domain management)
+
+Add it in [the repository's production environment](https://github.com/alexturpin/warden-worker/settings/environments).
+Do not copy the local OAuth token into CI. CI uses the API token directly and does
+not pass `--profile personal`: that profile exists only on your machine.
+
+KV and D1 are accessed through bindings at runtime. The pre-created KV namespace
+ID means production CI does not create namespaces or read/write their contents,
+so it does not require KV Edit. Account/database IDs are already committed in
+configuration; production deployment does not require ID secrets.
+
+After the configuration changes reach `main`, enable Actions for this fork if
+GitHub displays the fork-workflow prompt, then run `Deploy production` or push a
+commit to `main`. Do not also connect Workers Builds: that would deploy twice.
+
+JWT signing secrets are stored on the Worker and preserved across deployments;
+they are not GitHub secrets. Registration starts closed: `ALLOWED_EMAILS` is set
+to `registration-disabled` (which matches no valid email), and the Web Vault hides
+registration by default. To open registration for chosen addresses:
+
+```bash
+# Enter exact emails separated by commas, or an email glob such as *@alexturpin.com.
+npm exec -- wrangler secret put ALLOWED_EMAILS --profile personal
+# Enter false to display registration in the Web Vault.
+npm exec -- wrangler secret put DISABLE_USER_REGISTRATION --profile personal
+```
+
+Changing `ALLOWED_EMAILS` affects future registrations; existing accounts remain
+usable. JWT keys should stay stable across deployments to preserve sessions.
+Attachments use KV (maximum 25 MB per file). Mobile push is not configured.
+
+The optional backup workflow is separate: it needs a configured S3 or WebDAV
+backend and `CLOUDFLARE_ACCOUNT_ID` / `D1_DATABASE_ID` repository secrets. D1's
+built-in Time Travel is available, but offsite backups have not been configured.
+
+The sections below document upstream alternatives. Their placeholder IDs and
+optional development environment are not used by this production deployment.
+
+
 This page covers the available deployment paths. Pick the one that fits your workflow and infrastructure.
 
 - **CLI** — build and `wrangler deploy` from your machine.
@@ -36,28 +115,10 @@ This page covers the available deployment paths. Pick the one that fits your wor
 
 4. **Configure your Database ID:**
 
-   When you create a D1 database, Wrangler will output the `database_id`. To avoid committing this secret to your repository, this project uses an environment variable to configure the database ID.
-
-   You have two options:
-
-   **Option 1: (Recommended) Use a `.env` file:**
-
-   Create a file named `.env` in the root of the project and add the following line, replacing the placeholder with your actual `database_id`:
-
-   ```
-   D1_DATABASE_ID="your-database-id-goes-here"
-   ```
-
-   Make sure to add the `.env` file to your `.gitignore` file to prevent it from being committed to git.
-
-   **Option 2: Set an environment variable in your shell:**
-
-   You can set the environment variable in your shell before deploying:
-
-   ```bash
-   export D1_DATABASE_ID="your-database-id-goes-here"
-   wrangler deploy
-   ```
+   Set `database_id` directly in the production `[[d1_databases]]` section of
+   `wrangler.toml` to the ID printed by `wrangler d1 create`. Database IDs are not
+   secrets. Wrangler does not interpolate `${D1_DATABASE_ID}` in TOML; setting a
+   shell variable or `.env` alone does not substitute a placeholder.
 
 5. **Download the frontend (Web Vault):**
 
@@ -128,8 +189,8 @@ Add the following secrets to your GitHub repository (`Settings > Secrets and var
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `CLOUDFLARE_API_TOKEN` | yes | Your Cloudflare API token |
-| `CLOUDFLARE_ACCOUNT_ID` | yes | Your Cloudflare account ID |
-| `D1_DATABASE_ID` | yes | Your production D1 database ID |
+| `CLOUDFLARE_ACCOUNT_ID` | backups only | Account ID; production deploy reads the committed config |
+| `D1_DATABASE_ID` | backups only | Production database ID; production deploy reads the committed config |
 | `D1_DATABASE_ID_DEV` | no | Dev D1 database ID (required only if you use the `Deploy Dev` workflow on the `dev` branch) |
 
 #### How to Get Your Cloudflare Account ID
@@ -143,7 +204,7 @@ Add the following secrets to your GitHub repository (`Settings > Secrets and var
 The `CLOUDFLARE_API_TOKEN` requires the following permissions:
 - **Edit Cloudflare Workers**: Required for deploying the Worker
 - **Edit D1**: Required for database migrations and backups
-- **Edit KV**: Required for attachments storage (if using KV)
+- **Edit KV**: Only needed when CI creates namespaces or accesses KV contents; runtime attachment access uses the binding
 
 1. Visit [https://dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
 2. Click **Create Token**
@@ -160,7 +221,7 @@ You can pin/override the bundled Web Vault (bw_web_builds) version via GitHub Ac
 
 | Variable | Applies to | Default | Example | Notes |
 |----------|------------|---------|---------|-------|
-| `BW_WEB_VERSION` | prod (`main/uat/release*`) | `v2026.6.4` | `v2026.6.4` | Set to `latest` to follow upstream latest release |
+| `BW_WEB_VERSION` | prod (`main`) | `v2026.6.4` | `v2026.6.4` | Set to `latest` to follow upstream latest release |
 | `BW_WEB_VERSION_DEV` | dev (`dev`) | `v2026.6.4` | `v2026.6.4` | Set to `latest` to follow upstream latest release |
 
 #### Global Equivalent Domains
@@ -191,12 +252,18 @@ If you skip seeding, `/api/settings/domains` and `/api/sync` will return `global
       - Go to **Storage & databases** → **R2** → **Create bucket**
       - Create a production bucket (e.g., `warden-attachments`)
 
-   2. **Add the bucket names as GitHub Action secrets:**
-      - `R2_NAME` → production bucket name
+   2. **Add the production binding to `wrangler.toml`:**
 
-   The workflows will auto-append the `ATTACHMENTS_BUCKET` binding into `wrangler.toml` when these secrets are present - no manual binding in the Cloudflare console is required.
+      ```toml
+      [[r2_buckets]]
+      binding = "ATTACHMENTS_BUCKET"
+      bucket_name = "warden-attachments"
+      ```
 
-4. **Manually trigger the `Build` Action** from the GitHub Actions tab in your repository
+   R2 takes precedence over KV when both are configured. The production workflow
+   deploys the committed bindings; it does not append a binding from `R2_NAME`.
+
+4. **Manually trigger the `Deploy production` Action** from the GitHub Actions tab in your repository
 
 5. **Monitor the deployment** in the Actions tab of your repository
 
@@ -223,7 +290,7 @@ By default, the `*.workers.dev` domain is disabled, since it may throw 1101 erro
 > [!NOTE]
 > This is an **optional alternative** to the default [GitHub Actions](#cicd-deployment-with-github-actions) flow, not a replacement. Two things to weigh before adopting it:
 > - **Backups still need a GitHub token.** The daily `Backup D1 Database` workflow (`.github/workflows/backup-d1.yaml`) authenticates with the `CLOUDFLARE_API_TOKEN` GitHub secret, independent of how you deploy. Adopting Workers Builds does **not** remove that secret — you'd maintain *two* credentials: the Cloudflare build token (deploy) and the GitHub token (backups).
-> - **Avoid double-deploys.** If you connect Workers Builds, disable the GitHub Actions `Build` workflow (Actions tab → **Build** → **Disable workflow**, or remove its `push:` trigger) so `main` is not deployed twice.
+> - **Avoid double-deploys.** If you connect Workers Builds, disable the GitHub Actions `Deploy production` workflow (Actions tab → **Deploy production** → **Disable workflow**, or remove its `push:` trigger) so `main` is not deployed twice.
 > - **Slow deployment speed.** The Cloudflare build environment has low RAM, CPU, and the deployment will cost you 7 minutes or so, using up your Worker build time.
 
 Because this is a Rust→WASM Worker (the Workers Builds image does not ship Rust) and the frontend, database id, and migrations are all resolved at build time, the pipeline is encapsulated in two scripts:
@@ -270,7 +337,7 @@ Because this is a Rust→WASM Worker (the Workers Builds image does not ship Rus
 > The first build is slow (it compiles the Rust toolchain dependencies and `worker-build` from scratch). Subsequent builds reuse the build cache and are faster.
 
 > [!NOTE]
-> If you set `SKIP_D1=1` (or skip step 2), the Worker still builds and deploys, but D1 migrations are **not** applied automatically — apply them yourself when the schema changes (`npx wrangler d1 migrations apply vault1 --remote`), or run the GitHub Actions `Build` workflow manually.
+> If you set `SKIP_D1=1` (or skip step 2), the Worker still builds and deploys, but D1 migrations are **not** applied automatically — apply them yourself when the schema changes (`npx wrangler d1 migrations apply vault1 --remote`), or run the GitHub Actions `Deploy production` workflow manually.
 
 > [!IMPORTANT]
-> The default `Build` workflow deploys on every push to `main`. If you adopt Workers Builds, **disable that workflow** (repository **Actions** tab → select **Build** → **Disable workflow**, or remove the `push:` trigger in `.github/workflows/push-cloudflare.yaml`) so `main` is not deployed twice. Leave the `Backup D1 Database` workflow enabled — it still runs on its own schedule.
+> The default `Deploy production` workflow deploys on every push to `main`. If you adopt Workers Builds, **disable that workflow** (repository **Actions** tab → select **Deploy production** → **Disable workflow**, or remove the `push:` trigger in `.github/workflows/push-cloudflare.yaml`) so `main` is not deployed twice. Leave the `Backup D1 Database` workflow enabled — it still runs on its own schedule.
