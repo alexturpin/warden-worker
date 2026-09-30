@@ -184,7 +184,9 @@ This project includes GitHub Actions workflows for automated deployment. **This 
 
 ### Required Secrets
 
-Add the following secrets to your GitHub repository (`Settings > Secrets and variables > Actions`):
+For production deployment, add `CLOUDFLARE_API_TOKEN` to the `production` environment
+(`Settings > Environments > production`). Optional backup/dev workflows use
+repository secrets (`Settings > Secrets and variables > Actions`):
 
 | Secret | Required | Description |
 |--------|----------|-------------|
