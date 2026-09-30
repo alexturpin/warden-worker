@@ -65,6 +65,10 @@ configuration; production deployment does not require ID secrets.
 After the configuration changes reach `main`, enable Actions for this fork if
 GitHub displays the fork-workflow prompt, then run `Deploy production` or push a
 commit to `main`. Do not also connect Workers Builds: that would deploy twice.
+On the repository's Actions tab, click **I understand my workflows, go ahead and
+enable them**. A successful manual run or an API response showing an active
+workflow does not clear this separate fork gate; pushes remain disabled until
+the gate is cleared.
 
 JWT signing secrets are stored on the Worker and preserved across deployments;
 they are not GitHub secrets. Registration starts closed: `ALLOWED_EMAILS` is set
