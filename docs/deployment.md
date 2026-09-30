@@ -18,6 +18,17 @@ npm run dev
 npm exec -- wrangler secret list --profile personal
 ```
 
+To verify the account, activate the directory's profile first (`whoami` does not
+accept `--profile`):
+
+```bash
+npm exec -- wrangler auth activate personal
+npm exec -- wrangler whoami
+```
+
+If OAuth expires, run `npm exec -- wrangler auth create personal`, then `whoami`
+again. Activation selects an existing profile; it does not reauthenticate it.
+
 The production database is initialized from `sql/schema.sql`; migrations included
 in that snapshot are recorded in `d1_migrations`. Subsequent deployments apply new
 migrations before publishing the Worker. Do not apply the snapshot to an existing
